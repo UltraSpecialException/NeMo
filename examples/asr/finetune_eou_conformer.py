@@ -119,24 +119,16 @@ def update_model_config(train_set: Set[str], cfg: omegaconf.DictConfig) -> omega
         cfg: the loaded YAML file containing the configurations necessary
     """
     model.cfg.labels = list(train_set)
-    cfg = copy.deepcopy(model.cfg)
 
     # Setup train, validation configs
     with open_dict(cfg):
         # Train dataset
-        cfg.train_ds.manifest_filepath = cfg.model.train_ds.manifest_filepath
-        cfg.train_ds.labels = list(train_set)
-        cfg.train_ds.batch_size = cfg.model.train_ds.batch_size
-        cfg.train_ds.num_workers = cfg.model.train_ds.num_workers
-        cfg.train_ds.is_tarred = cfg.model.train_ds.is_tarred
+        model.cfg.train_ds = cfg.train_ds
 
         # Validation dataset
-        cfg.validation_ds.manifest_filepath = cfg.model.validation_ds.manifest_filepath
-        cfg.validation_ds.labels = list(train_set)
-        cfg.validation_ds.batch_size = cfg.model.validation_ds.batch_size
-        cfg.validation_ds.num_workers = cfg.model.validation_ds.num_workers
-        cfg.validation_ds.is_tarred = cfg.model.validation_ds.is_tarred
-    return cfg
+        model.cfg.validation_ds = cfg.validation_ds
+
+    return model.cfg
 
 
 def setup_opt_sched(model: nemo_asr.models.ASRModel, cfg: omegaconf.DictConfig) -> None:
@@ -197,10 +189,7 @@ def setup_spec_augment(model: nemo_asr.models.ASRModel, cfg: omegaconf.DictConfi
     Set up the Spectrogram Augmentation using the given arguments.
     """
     with open_dict(model.cfg.spec_augment):
-        model.cfg.spec_augment.freq_masks = cfg.model.spec_augment.freq_masks
-        model.cfg.spec_augment.freq_width = cfg.model.spec_augment.freq_width
-        model.cfg.spec_augment.time_masks = cfg.model.spec_augment.time_masks
-        model.cfg.spec_augment.time_width = cfg.model.spec_augment.time_width
+        model.cfg.spec_augment = cfg.model.spec_augment
 
 
 def remove_from_regex(data: Dict[str, Any], regex: str) -> Dict[str, Any]:
@@ -244,6 +233,19 @@ def main(cfg):
     validation_charset = get_charset(validation_manifest)
 
     train_set = set(train_charset.keys())
+
+    os.system(f"python scripts/tokenizers/process_asr_text_tokenizer.py \\\n"
+              f"--manifest={cfg.model.train_ds.manifest_filepath} \\\n"
+              f"--vocab_size={len(train_set) + 2} \\\n"
+              f"--data_root={cfg.model.tokenizer.dir} \\\n"
+              f"--tokenizer=spe \\\n"
+              f"--spe_type={cfg.model.tokenizer.type} \\\n"
+              f"--spe_character_coverage=1.0 \\\n"
+              f"--no_lower_case \\\n"
+              f"--log")
+
+    tokenizer_dir = f"{cfg.model.tokenizer.dir}/tokenizer_spe_{cfg.model.tokenizer.type}_v{len(train_set) + 2}/"
+
     validation_set = set(validation_charset.keys())
 
     train_validation_common = set.intersection(train_set, validation_set)
@@ -260,6 +262,7 @@ def main(cfg):
     cfg.validation_ds.manifest_filepath = validation_manifest_cleaned_path
 
     model = setup_model(cfg.model_name, cfg.freeze_encoder)
+    model.change_vocabulary(new_tokenizer=tokenizer_dir, new_tokenizer_type="bpe")
 
     updated_config = update_model_config(train_set, cfg)
 
