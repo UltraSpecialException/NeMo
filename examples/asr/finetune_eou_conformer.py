@@ -20,6 +20,7 @@ import pytorch_lightning as ptl
 from argparse import ArgumentParser, Namespace
 import re
 from string import punctuation
+import json
 
 
 def read_manifest(path: str) -> List[Dict[str, Any]]:
