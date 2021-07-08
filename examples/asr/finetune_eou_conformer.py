@@ -119,15 +119,20 @@ def update_model_config(train_set: Set[str], cfg: omegaconf.DictConfig) -> omega
     Argument(s):
         cfg: the loaded YAML file containing the configurations necessary
     """
-    model.cfg.labels = list(train_set)
-
     # Setup train, validation configs
     with open_dict(cfg):
         # Train dataset
-        model.cfg.train_ds = cfg.train_ds
+        model.cfg.train_ds.manifest_filepath = cfg.model.train_ds.manifest_filepath
+        model.cfg.train_ds.batch_size = cfg.model.train_ds.batch_size
+        model.cfg.train_ds.is_tarred = cfg.model.train_ds.is_tarred
+        model.cfg.train_ds.tarred_audio_filepaths = cfg.model.train_ds.tarred_audio_filepaths
+        model.cfg.train_ds.shuffle_n = cfg.model.train_ds.shuffle_n
+        model.cfg.train_ds.num_workers = cfg.model.train_ds.num_workers
 
         # Validation dataset
-        model.cfg.validation_ds = cfg.validation_ds
+        model.cfg.validation_ds.manifest_filepath = cfg.model.validation_ds.manifest_filepath
+        model.cfg.validation_ds.batch_size = cfg.model.validation_ds.batch_size
+        model.cfg.validation_ds.num_workers = cfg.model.validation_ds.num_workers
 
     return model.cfg
 
@@ -141,6 +146,11 @@ def setup_opt_sched(model: nemo_asr.models.ASRModel, cfg: omegaconf.DictConfig) 
     """
     with open_dict(model.cfg.optim):
         model.cfg.optim.lr = cfg.model.optim.lr
+        model.cfg.optim.name = cfg.model.optim.name
+        model.cfg.optim.betas = cfg.model.optim.betas
+        model.cfg.optim.weight_decay = cfg.model.optim.weight_decay
+        model.cfg.optim.sched.warmup_steps = cfg.model.optim.sched.warmup_steps
+        model.cfg.optim.sched.min_lr = cfg.model.optim.sched.min_lr
 
 
 def setup_exp_manager(exp_dir: str, name: str) -> omegaconf.DictConfig:
@@ -190,7 +200,8 @@ def setup_spec_augment(model: nemo_asr.models.ASRModel, cfg: omegaconf.DictConfi
     Set up the Spectrogram Augmentation using the given arguments.
     """
     with open_dict(model.cfg.spec_augment):
-        model.cfg.spec_augment = cfg.model.spec_augment
+        model.cfg.spec_augment.freq_masks = cfg.model.spec_augment.freq_masks
+        model.cfg.spec_augment.time_masks = cfg.model.spec_augment.time_masks
 
 
 def remove_from_regex(data: Dict[str, Any], regex: str) -> Dict[str, Any]:
@@ -244,37 +255,39 @@ def main(cfg):
     tokenizer_dir = f"{cfg.model.tokenizer.dir}/tokenizer_spe_{cfg.model.tokenizer.type}_v{len(train_set) + 2}/"
 
     new_validation_paths = omegaconf.ListConfig([])
-    for validation_manifest in cfg.model.validation_ds.manifest_filepath:
+    for validation_manifest_path in cfg.model.validation_ds.manifest_filepath:
+        validation_manifest = read_manifest(validation_manifest_path)
         validation_charset = get_charset(validation_manifest)
         validation_set = set(validation_charset.keys())
 
         train_validation_common = set.intersection(train_set, validation_set)
         validation_oov = validation_set - train_validation_common
 
-        oov_removal_regex = "[" + "".join(token for token in validation_oov) + "]"
-        remove_oov = lambda data: remove_from_regex(data, oov_removal_regex)
-        preprocessors = [remove_oov]
+        if validation_oov:
+            oov_removal_regex = "[" + "".join(token for token in validation_oov) + "]"
+            remove_oov = lambda data: remove_from_regex(data, oov_removal_regex)
+            preprocessors = [remove_oov]
 
-        validation_data_processed = apply_preprocessors(validation_manifest, preprocessors)
-        new_validation_paths.append(write_processed_manifest(
-            validation_data_processed, validation_manifest))
+            validation_data_processed = apply_preprocessors(validation_manifest, preprocessors)
+            new_validation_paths.append(write_processed_manifest(
+                validation_data_processed, validation_manifest_path))
+        else:
+            new_validation_paths.append(validation_manifest_path)
 
-    cfg.validation_ds.manifest_filepath = new_validation_paths
+    cfg.model.validation_ds.manifest_filepath = new_validation_paths
 
-    model = setup_model(cfg.model_name, cfg.freeze_encoder)
-    model.change_vocabulary(new_tokenizer=tokenizer_dir, new_tokenizer_type="bpe")
+    model = setup_model(cfg.model.name, cfg.model.freeze_encoder)
+    model.change_vocabulary(new_tokenizer_dir=tokenizer_dir, new_tokenizer_type="bpe")
 
     updated_config = update_model_config(train_set, cfg)
+    trainer = setup_trainer(model, cfg)
 
     model.setup_training_data(updated_config.train_ds)
     model.setup_multiple_validation_data(updated_config.validation_ds)
 
     setup_opt_sched(model, cfg)
-    char_model.spec_augmentation = model.from_config_dict(model.cfg.spec_augment)
-
     setup_spec_augment(model, cfg)
 
-    trainer = setup_trainer(model, cfg)
     exp_manager.exp_manager(trainer, cfg.get("exp_manager", None))
     trainer.fit(model)
 
