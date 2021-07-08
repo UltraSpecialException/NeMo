@@ -228,11 +228,7 @@ def main(cfg):
     logging.info(f"Hydra config: {OmegaConf.to_yaml(cfg)}")
 
     train_manifest = read_manifest(cfg.model.train_ds.manifest_filepath)
-    validation_manifest = read_manifest(cfg.model.validation_ds.manifest_filepath)
-
     train_charset = get_charset(train_manifest)
-    validation_charset = get_charset(validation_manifest)
-
     train_set = set(train_charset.keys())
 
     os.system(f"python scripts/tokenizers/process_asr_text_tokenizer.py \\\n"
@@ -247,20 +243,23 @@ def main(cfg):
 
     tokenizer_dir = f"{cfg.model.tokenizer.dir}/tokenizer_spe_{cfg.model.tokenizer.type}_v{len(train_set) + 2}/"
 
-    validation_set = set(validation_charset.keys())
+    new_validation_paths = omegaconf.ListConfig([])
+    for validation_manifest in cfg.model.validation_ds.manifest_filepath:
+        validation_charset = get_charset(validation_manifest)
+        validation_set = set(validation_charset.keys())
 
-    train_validation_common = set.intersection(train_set, validation_set)
-    validation_oov = validation_set - train_validation_common
+        train_validation_common = set.intersection(train_set, validation_set)
+        validation_oov = validation_set - train_validation_common
 
-    validation_oov_removal_regex = "[" + "".join(token for token in validation_oov) + "]"
-    validation_remove_oov = lambda data: remove_from_regex(data, validation_oov_removal_regex)
-    validation_preprocessors = [validation_remove_oov]
+        oov_removal_regex = "[" + "".join(token for token in validation_oov) + "]"
+        remove_oov = lambda data: remove_from_regex(data, oov_removal_regex)
+        preprocessors = [remove_oov]
 
-    # since we're only removing the out of vocab tokens from the val set, only need to preprocess these sets
-    validation_data_processed = apply_preprocessors(validation_manifest, validation_preprocessors)
-    validation_manifest_cleaned_path = write_processed_manifest(
-        validation_data_processed, cfg.validation_ds.manifest_filepath)
-    cfg.validation_ds.manifest_filepath = validation_manifest_cleaned_path
+        validation_data_processed = apply_preprocessors(validation_manifest, preprocessors)
+        new_validation_paths.append(write_processed_manifest(
+            validation_data_processed, validation_manifest))
+
+    cfg.validation_ds.manifest_filepath = new_validation_paths
 
     model = setup_model(cfg.model_name, cfg.freeze_encoder)
     model.change_vocabulary(new_tokenizer=tokenizer_dir, new_tokenizer_type="bpe")
