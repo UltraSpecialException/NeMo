@@ -112,7 +112,7 @@ def setup_model(model_name: str, freeze: bool) -> nemo_asr.models.ASRModel:
     return model
 
 
-def update_model_config(train_set: Set[str], cfg: omegaconf.DictConfig) -> omegaconf.DictConfig:
+def update_model_config(model: nemo_asr.models.ASRModel, cfg: omegaconf.DictConfig) -> omegaconf.DictConfig:
     """
     Update the model's inner configuration using the arguments given.
 
@@ -279,7 +279,7 @@ def main(cfg):
     model = setup_model(cfg.model.name, cfg.model.freeze_encoder)
     model.change_vocabulary(new_tokenizer_dir=tokenizer_dir, new_tokenizer_type="bpe")
 
-    updated_config = update_model_config(train_set, cfg)
+    updated_config = update_model_config(model,train_set)
     trainer = setup_trainer(model, cfg)
 
     model.setup_training_data(updated_config.train_ds)
