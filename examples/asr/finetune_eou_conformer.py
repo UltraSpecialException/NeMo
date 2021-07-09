@@ -279,7 +279,7 @@ def main(cfg):
     model = setup_model(cfg.model.name, cfg.model.freeze_encoder)
     model.change_vocabulary(new_tokenizer_dir=tokenizer_dir, new_tokenizer_type="bpe")
 
-    updated_config = update_model_config(model,train_set)
+    updated_config = update_model_config(model, cfg)
     trainer = setup_trainer(model, cfg)
 
     model.setup_training_data(updated_config.train_ds)
