@@ -23,17 +23,29 @@ from string import punctuation
 import json
 
 
-def setup_model(model_name: str, freeze: bool) -> nemo_asr.models.ASRModel:
+def setup_model(cfg: omegaconf.DictConfig) -> nemo_asr.models.EncDecCTCModelBPE:
     """
     Returns a model from the given pretrained model name.
 
     Argument(s):
-        model_name: string of name of the pretrained model to load
-        freeze: boolean indicating whether or not to freeze the encoder
+        cfg: the loaded YAML file containing the configurations necessary
     """
-    model = nemo_asr.models.ASRModel.from_pretrained(model_name, map_location="cpu")
+    pretrained_model = nemo_asr.models.ASRModel.from_pretrained(cfg.model.name, map_location="cpu")
+    model = nemo_asr.models.EncDecCTCModelBPE(cfg)
 
-    if freeze:
+    try:
+        model.encoder.load_state_dict(pretrained_model.encoder.state_dict(), strict=False)
+    except Exception as e:
+        logging.info(f"Could not load encoder checkpoint: {e}")
+
+    try:
+        model.encoder.load_state_dict(pretrained_model.decoder.state_dict(), strict=False)
+    except Exception as e:
+        logging.info(f"Could not load decoder checkpoint: {e}")
+
+    del pretrained_model
+
+    if cfg.model.freeze_encoder:
         def enable_bn_se(module):
             """
             Function to unfreeze the batch norm and SqueezeExcite modules in the encoder when the rest is frozen
@@ -56,7 +68,7 @@ def setup_model(model_name: str, freeze: bool) -> nemo_asr.models.ASRModel:
     return model
 
 
-def update_model_config(model: nemo_asr.models.ASRModel, cfg: omegaconf.DictConfig) -> omegaconf.DictConfig:
+def update_model_config(model: nemo_asr.models.EncDecCTCModelBPE, cfg: omegaconf.DictConfig) -> omegaconf.DictConfig:
     """
     Update the model's inner configuration using the arguments given.
 
@@ -81,7 +93,7 @@ def update_model_config(model: nemo_asr.models.ASRModel, cfg: omegaconf.DictConf
     return model.cfg
 
 
-def setup_opt_sched(model: nemo_asr.models.ASRModel, cfg: omegaconf.DictConfig) -> None:
+def setup_opt_sched(model: nemo_asr.models.EncDecCTCModelBPE, cfg: omegaconf.DictConfig) -> None:
     """
     Set up the optimizer's and scheduler's configuration based on the given arguments.
 
@@ -119,7 +131,7 @@ def setup_exp_manager(exp_dir: str, name: str) -> omegaconf.DictConfig:
     return config
 
 
-def setup_trainer(model: nemo_asr.models.ASRModel, cfg: omegaconf.DictConfig) -> ptl.Trainer:
+def setup_trainer(model: nemo_asr.models.EncDecCTCModelBPE, cfg: omegaconf.DictConfig) -> ptl.Trainer:
     """
     Set up the trainer using PyTorch Lightning.
 
@@ -141,7 +153,7 @@ def setup_trainer(model: nemo_asr.models.ASRModel, cfg: omegaconf.DictConfig) ->
     return trainer
 
 
-def setup_spec_augment(model: nemo_asr.models.ASRModel, cfg: omegaconf.DictConfig) -> None:
+def setup_spec_augment(model: nemo_asr.models.EncDecCTCModelBPE, cfg: omegaconf.DictConfig) -> None:
     """
     Set up the Spectrogram Augmentation using the given arguments.
     """
@@ -168,7 +180,7 @@ def main(cfg):
     """
     logging.info(f"Hydra config: {OmegaConf.to_yaml(cfg)}")
 
-    model = setup_model(cfg.model.name, cfg.model.freeze_encoder)
+    model = setup_model(cfg)
     model.change_vocabulary(new_tokenizer_dir=cfg.model.tokenizer.dir, new_tokenizer_type=cfg.model.tokenizer.type)
 
     pretrained_decoder = model.decoder.state_dict()
