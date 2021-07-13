@@ -23,62 +23,6 @@ from string import punctuation
 import json
 
 
-def read_manifest(path: str) -> List[Dict[str, Any]]:
-    """
-    Reads the manifest file from <path> and returns a list of dictionaries each containing the metadata of the
-    corresponding data sample.
-
-    Argument(s):
-        path: string pointing to path of manifest file.
-    """
-    manifest = []
-    with open(path, "r") as f:
-        for line in tqdm(f, desc="Reading manifest data"):
-            line = line.replace("\n", "")
-            data = json.loads(line)
-            manifest.append(data)
-    return manifest
-
-
-def write_processed_manifest(data: List[Dict[str, Any]], original_path: str) -> str:
-    """
-    Write the processed manifest data, using <original_path> as the base of the name of the new file.
-
-    Argument(s):
-        data: the new and processed list of dictionaries each containing the metadata of an audio file sample and the
-            corresponding transcript
-        original_path: a string pointing to the original path of the unprocessed manifest data.
-    """
-    original_manifest_name = os.path.basename(original_path)
-    new_manifest_name = original_manifest_name.replace(".json", "_processed.json")
-
-    manifest_dir = os.path.split(original_path)[0]
-    filepath = os.path.join(manifest_dir, new_manifest_name)
-    with open(filepath, "w+") as f:
-        for datum in tqdm(data, desc="Writing manifest data"):
-            datum = json.dumps(datum)
-            f.write(f"{datum}\n")
-    print(f"Finished writing manifest: {filepath}")
-    return filepath
-
-
-def get_charset(manifest_data: List[Dict[str, Any]]) -> Dict[str, int]:
-    """
-    From the manifest data given, return a dictionary mapping each character to the number of occurrences of the
-    character.
-
-    Argument(s):
-        manifest_data: a list of dictionaries each containing the metadata of an audio file sample and the corresponding
-            transcript
-    """
-    charset = defaultdict(int)
-    for row in tqdm(manifest_data, desc="Computing character set"):
-        text = row["text"]
-        for character in text:
-            charset[character] += 1
-    return charset
-
-
 def setup_model(model_name: str, freeze: bool) -> nemo_asr.models.ASRModel:
     """
     Returns a model from the given pretrained model name.
@@ -152,6 +96,8 @@ def setup_opt_sched(model: nemo_asr.models.ASRModel, cfg: omegaconf.DictConfig) 
         model.cfg.optim.sched.warmup_steps = cfg.model.optim.sched.warmup_steps
         model.cfg.optim.sched.min_lr = cfg.model.optim.sched.min_lr
 
+    model.setup_optimization(model.cfg.optim)
+
 
 def setup_exp_manager(exp_dir: str, name: str) -> omegaconf.DictConfig:
     """
@@ -203,6 +149,8 @@ def setup_spec_augment(model: nemo_asr.models.ASRModel, cfg: omegaconf.DictConfi
         model.cfg.spec_augment.freq_masks = cfg.model.spec_augment.freq_masks
         model.cfg.spec_augment.time_masks = cfg.model.spec_augment.time_masks
 
+    model.spec_augment = model.from_config_dict(model.cfg.spec_augment)
+
 
 def remove_from_regex(data: Dict[str, Any], regex: str) -> Dict[str, Any]:
     """
@@ -213,24 +161,6 @@ def remove_from_regex(data: Dict[str, Any], regex: str) -> Dict[str, Any]:
     return data
 
 
-def apply_preprocessors(manifest: List[Dict[str, Any]], preprocessors: List[Callable]) -> List[Dict[str, Any]]:
-    """
-    Return the preprocessed manifest by applying the list of preprocessors to it.
-
-    Argument(s):
-        manifest: a list of dictionaries each containing the metadata of an audio file sample and the corresponding
-            transcript
-        preprocessors: a list of Callables that can be called on the individual dictionaries within <manifest> to
-            process them
-    """
-    for processor in preprocessors:
-        for idx in tqdm(range(len(manifest)), desc=f"Applying {processor.__name__}"):
-            manifest[idx] = processor(manifest[idx])
-
-    print("Finished processing manifest!")
-    return manifest
-
-
 @hydra_runner(config_path="conf", config_name="config")
 def main(cfg):
     """
@@ -238,46 +168,15 @@ def main(cfg):
     """
     logging.info(f"Hydra config: {OmegaConf.to_yaml(cfg)}")
 
-    train_manifest = read_manifest(cfg.model.train_ds.manifest_filepath)
-    train_charset = get_charset(train_manifest)
-    train_set = set(train_charset.keys())
-
-    os.system(f"python scripts/tokenizers/process_asr_text_tokenizer.py \\\n"
-              f"--manifest={cfg.model.train_ds.manifest_filepath} \\\n"
-              f"--vocab_size={len(train_set) + 2} \\\n"
-              f"--data_root={cfg.model.tokenizer.dir} \\\n"
-              f"--tokenizer=spe \\\n"
-              f"--spe_type={cfg.model.tokenizer.type} \\\n"
-              f"--spe_character_coverage=1.0 \\\n"
-              f"--no_lower_case \\\n"
-              f"--log")
-
-    tokenizer_dir = f"{cfg.model.tokenizer.dir}/tokenizer_spe_{cfg.model.tokenizer.type}_v{len(train_set) + 2}/"
-
-    new_validation_paths = omegaconf.ListConfig([])
-    for validation_manifest_path in cfg.model.validation_ds.manifest_filepath:
-        validation_manifest = read_manifest(validation_manifest_path)
-        validation_charset = get_charset(validation_manifest)
-        validation_set = set(validation_charset.keys())
-
-        train_validation_common = set.intersection(train_set, validation_set)
-        validation_oov = validation_set - train_validation_common
-
-        if validation_oov:
-            oov_removal_regex = "[" + "".join(token for token in validation_oov) + "]"
-            remove_oov = lambda data: remove_from_regex(data, oov_removal_regex)
-            preprocessors = [remove_oov]
-
-            validation_data_processed = apply_preprocessors(validation_manifest, preprocessors)
-            new_validation_paths.append(write_processed_manifest(
-                validation_data_processed, validation_manifest_path))
-        else:
-            new_validation_paths.append(validation_manifest_path)
-
-    cfg.model.validation_ds.manifest_filepath = new_validation_paths
-
     model = setup_model(cfg.model.name, cfg.model.freeze_encoder)
-    model.change_vocabulary(new_tokenizer_dir=tokenizer_dir, new_tokenizer_type="bpe")
+    model.change_vocabulary(new_tokenizer_dir=cfg.model.tokenizer.dir, new_tokenizer_type=cfg.model.tokenizer.type)
+
+    pretrained_decoder = model.decoder.state_dict()
+    if model.decoder.decoder_layers[0].weight.shape == pretrained_decoder["decoder_layers.0.weight"].shape:
+        model.decoder.load_state_dict(pretrained_decoder)
+        logging.info("Loaded decoder's weights")
+    else:
+        logging.info("Weights' shape mismatch. Cannot load decoder's weights.")
 
     updated_config = update_model_config(model, cfg)
     trainer = setup_trainer(model, cfg)
