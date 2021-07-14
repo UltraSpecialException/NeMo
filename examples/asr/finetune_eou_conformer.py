@@ -35,11 +35,13 @@ def setup_model(cfg: omegaconf.DictConfig, trainer: ptl.Trainer) -> nemo_asr.mod
 
     try:
         model.encoder.load_state_dict(pretrained_model.encoder.state_dict(), strict=False)
+        logging.info("Successfully loaded encoder weights")
     except Exception as e:
         logging.info(f"Could not load encoder checkpoint: {e}")
 
     try:
         model.encoder.load_state_dict(pretrained_model.decoder.state_dict(), strict=False)
+        logging.info("Successfully loaded decoder weights")
     except Exception as e:
         logging.info(f"Could not load decoder checkpoint: {e}")
 
