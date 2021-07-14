@@ -23,7 +23,7 @@ from string import punctuation
 import json
 
 
-def setup_model(cfg: omegaconf.DictConfig) -> nemo_asr.models.EncDecCTCModelBPE:
+def setup_model(cfg: omegaconf.DictConfig, trainer: ptl.Trainer) -> nemo_asr.models.EncDecCTCModelBPE:
     """
     Returns a model from the given pretrained model name.
 
@@ -31,7 +31,7 @@ def setup_model(cfg: omegaconf.DictConfig) -> nemo_asr.models.EncDecCTCModelBPE:
         cfg: the loaded YAML file containing the configurations necessary
     """
     pretrained_model = nemo_asr.models.ASRModel.from_pretrained(cfg.model.name, map_location="cpu")
-    model = nemo_asr.models.EncDecCTCModelBPE(cfg)
+    model = nemo_asr.models.EncDecCTCModelBPE(cfg=cfg.model, trainer=trainer)
 
     try:
         model.encoder.load_state_dict(pretrained_model.encoder.state_dict(), strict=False)
@@ -179,25 +179,8 @@ def main(cfg):
     Set up and run the fine-tune task for EOU detection using pretrained Conformer-CTC model.
     """
     logging.info(f"Hydra config: {OmegaConf.to_yaml(cfg)}")
-
-    model = setup_model(cfg)
-    model.change_vocabulary(new_tokenizer_dir=cfg.model.tokenizer.dir, new_tokenizer_type=cfg.model.tokenizer.type)
-
-    pretrained_decoder = model.decoder.state_dict()
-    if model.decoder.decoder_layers[0].weight.shape == pretrained_decoder["decoder_layers.0.weight"].shape:
-        model.decoder.load_state_dict(pretrained_decoder)
-        logging.info("Loaded decoder's weights")
-    else:
-        logging.info("Weights' shape mismatch. Cannot load decoder's weights.")
-
-    updated_config = update_model_config(model, cfg)
-    trainer = setup_trainer(model, cfg)
-
-    model.setup_training_data(updated_config.train_ds)
-    model.setup_multiple_validation_data(updated_config.validation_ds)
-
-    setup_opt_sched(model, cfg)
-    setup_spec_augment(model, cfg)
+    trainer = ptl.Trainer(**cfg.trainer)
+    model = setup_model(cfg, trainer)
 
     exp_manager.exp_manager(trainer, cfg.get("exp_manager", None))
     trainer.fit(model)
