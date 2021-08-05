@@ -23,6 +23,7 @@ from nemo.collections.asr.losses.ctc import CTCLoss
 from nemo.collections.asr.metrics.wer_bpe_eou import WERBPEEOU
 from nemo.collections.asr.models.ctc_bpe_models import EncDecCTCModelBPE
 from nemo.core.classes.common import PretrainedModelInfo, typecheck
+from nemo.utils import logging
 
 
 class EOUDetectionModel(EncDecCTCModelBPE):
@@ -41,13 +42,9 @@ class EOUDetectionModel(EncDecCTCModelBPE):
 
         with open_dict(self._cfg):
             if "eou_decoder" not in self._cfg:
-                raise ValueError("To initialize an instance of the EOUDetectionModel, the given config requires"
-                                 "the attribute \"eou_decoder\".")
-
-            if "feat_in" not in self._cfg.eou_decoder:
+                logging.info("No EOU decoder configuration was detected, copying the regular decoder's configuration.")
+                self._cfg.eou_decoder = copy.deepcopy(self._cfg.decoder)
                 self._cfg.eou_decoder.feat_in = self.tokenizer.vocab_size
-
-            if "d_model" not in self._cfg.eou_decoder:
                 self._cfg.eou_decoder.d_model = self.tokenizer.vocab_size
 
         self.eou_decoder = EncDecCTCModelBPE.from_config_dict(self._cfg.eou_decoder)
