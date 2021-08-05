@@ -1,5 +1,6 @@
 from typing import List, Tuple
 
+import re
 import editdistance
 import torch
 from torchmetrics import Metric
@@ -37,21 +38,31 @@ class WERBPEEOU(WERBPE):
         """
         super().__init__(tokenizer, batch_dim_index, use_cer, ctc_decode, log_prediction, dist_sync_on_step)
 
-        vocabulary = tokenizer.tokenizer.get_vocab()
+        self.vocabulary = tokenizer.tokenizer.get_vocab()
         if eou_token not in vocabulary:
             raise ValueError(f"{eou_token} not found in the tokenizer's vocabulary.")
 
-        self.eou_token_id = vocabulary[eou_token]
-        self.sub_token_id = sub_token_id
+        self.eou_token = eou_token
+
+        for char in self.vocabulary:
+            if self.vocabulary[char] == sub_token_id:
+                self.sub_token = char
+                break
 
     def decode_tokens_to_str(self, tokens: List[int]) -> str:
         """
-        Decodes a token list into a string. However, replaces all non EOU tokens with self.sub_token_id's token.
+        Decodes a token list into a string. However, replaces all non EOU tokens with self.sub_token.
 
         Args:
             tokens: List of int representing the token ids.
         Returns:
             A list of decoded tokens.
         """
-        tokens_to_decode = [self.sub_token_id if token != self.eou_token_id else self.eou_token_id for token in tokens]
-        return super().decode_tokens_to_str(tokens_to_decode)
+        decoded_tokens = super().decode_tokens_to_str(tokens)
+        converted_decoded_str = [
+            self.sub_token if char != self.eou_token else char for char in decoded_tokens
+        ]
+
+        substituted_str = "".join(converted_decoded_str)
+
+        return re.sub(f"{self.sub_token}{2,}", f"{self.sub_token}", substituted_str)
