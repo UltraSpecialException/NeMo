@@ -21,6 +21,7 @@ from omegaconf import DictConfig, open_dict
 
 from nemo.collections.asr.losses.ctc import CTCLoss
 from nemo.collections.asr.metrics.wer_bpe_eou import WERBPEEOU
+from nemo.collections.asr.metrics.wer_bpe import WERBPE
 from nemo.collections.asr.models.ctc_bpe_models import EncDecCTCModelBPE
 from nemo.core.classes.common import PretrainedModelInfo, typecheck
 from nemo.utils import logging
@@ -44,8 +45,8 @@ class EOUDetectionModel(EncDecCTCModelBPE):
             if "eou_decoder" not in self._cfg:
                 logging.info("No EOU decoder configuration was detected, copying the regular decoder's configuration.")
                 self._cfg.eou_decoder = copy.deepcopy(self._cfg.decoder)
-                self._cfg.eou_decoder.feat_in = self.tokenizer.vocab_size
-                self._cfg.eou_decoder.d_model = self.tokenizer.vocab_size
+                self._cfg.eou_decoder.feat_in = self.decoder.num_classes_with_blank
+                self._cfg.eou_decoder.num_classes = self.decoder.num_classes_with_blank - 1
 
         self.eou_decoder = EncDecCTCModelBPE.from_config_dict(self._cfg.eou_decoder)
         self.loss = CTCLoss(
@@ -65,7 +66,7 @@ class EOUDetectionModel(EncDecCTCModelBPE):
         else:
             logging.info("Using token with ID 0 in place of non-EOU tokens.")
 
-        self._wer = WERBPEEOU(
+        self._wer = WERBPE(
             tokenizer=self.tokenizer,
             batch_dim_index=0,
             use_cer=self._cfg.get('use_cer', False),

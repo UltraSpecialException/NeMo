@@ -25,7 +25,7 @@ class WERBPEEOU(WERBPE):
             ctc_decode=True,
             log_prediction=True,
             dist_sync_on_step=False,
-            eou_token="\u00a5",
+            eou_token="##\u00a5",
             sub_token_id=0
     ) -> None:
         """
@@ -39,7 +39,7 @@ class WERBPEEOU(WERBPE):
         super().__init__(tokenizer, batch_dim_index, use_cer, ctc_decode, log_prediction, dist_sync_on_step)
 
         self.vocabulary = tokenizer.tokenizer.get_vocab()
-        if eou_token not in vocabulary:
+        if eou_token not in self.vocabulary:
             raise ValueError(f"{eou_token} not found in the tokenizer's vocabulary.")
 
         self.eou_token = eou_token

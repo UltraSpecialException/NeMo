@@ -30,7 +30,7 @@ def setup_model(cfg: omegaconf.DictConfig, trainer: ptl.Trainer) -> nemo_asr.mod
     Argument(s):
         cfg: the loaded YAML file containing the configurations necessary
     """
-    pretrained_model = nemo_asr.models.ASRModel.from_pretrained(cfg.model.name, map_location="cpu")
+    pretrained_model = nemo_asr.models.EncDecCTCModelBPE.from_pretrained(cfg.model.name, map_location="cpu")
 
     if "run_two_head" in cfg and cfg.run_two_head:
         model_class = nemo_asr.models.EOUDetectionModel
@@ -51,8 +51,6 @@ def setup_model(cfg: omegaconf.DictConfig, trainer: ptl.Trainer) -> nemo_asr.mod
     except Exception as e:
         logging.info(f"Could not load decoder checkpoint: {e}")
 
-    if "run_two_head" in cfg and cfg.run_two_head:
-        model.eou_decoder.load_state_dict(pretrained_model.decoder.state_dict(), strict=False)
 
     del pretrained_model
 
