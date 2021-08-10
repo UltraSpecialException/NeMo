@@ -83,7 +83,7 @@ class EOUDetectionModel(EncDecCTCModelBPE):
         self.encoder.freeze()
         self.decoder.freeze()
 
-    @typecheck
+    @typecheck()
     def forward(
             self, input_signal=None, input_signal_length=None, processed_signal=None, processed_signal_length=None
     ):
@@ -126,8 +126,8 @@ class EOUDetectionModel(EncDecCTCModelBPE):
             processed_signal = self.spec_augmentation(input_spec=processed_signal, length=processed_signal_length)
 
         encoded, encoded_len = self.encoder(audio_signal=processed_signal, length=processed_signal_length)
-        decoder_output = self.decoder.decoder_layers(encoder_output=encoded)
-        log_probs = self.eou_decoder(decoder_output)
+        decoder_output = self.decoder.decoder_layers(encoded)
+        log_probs = self.eou_decoder(encoder_output=decoder_output)
         greedy_predictions = log_probs.argmax(dim=-1, keepdim=False)
 
         return log_probs, encoded_len, greedy_predictions
