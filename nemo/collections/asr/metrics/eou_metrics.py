@@ -17,6 +17,7 @@ from typing import List, Set, Tuple
 import editdistance
 import torch
 from torchmetrics import Metric
+import math
 
 from nemo.collections.asr.parts.utils.rnnt_utils import Hypothesis
 from nemo.collections.common.tokenizers.tokenizer_spec import TokenizerSpec
@@ -25,14 +26,9 @@ from nemo.utils import logging
 
 class EOUMetrics(Metric):
     """
-    Computes EOU metrics, including accuracy, precision, recall, F1 & latency.
+    Computes EOU metrics, including precision, recall, F1 & latency.
 
     Let K be the "acceptable" distance between the predicted and expected EOU token's position
-    Accuracy:
-    Let E(s) = EOU token position in the reference
-        P(s) = EOU token position in the hypothesis
-
-    Then, for sentence s, if |E(s) - P(s)| <= K, then the EOU detection is deemed acceptable. Otherwise, it is not.
     """
     def __init__(
             self,
@@ -68,7 +64,7 @@ class EOUMetrics(Metric):
         self.add_state("num_predicted", default=torch.tensor(0), dist_reduce_fx='sum', persistent=False)
         self.add_state("correct_from_expected", default=torch.tensor(0), dist_reduce_fx='sum', persistent=False)
         self.add_state("correct_from_predicted", default=torch.tensor(0), dist_reduce_fx='sum', persistent=False)
-        self.add_state("distance", default.tensor(0), dist_reduce_fx='sum', persistent=False)
+        self.add_state("total_latency", default.tensor(0), dist_reduce_fx='sum', persistent=False)
 
     def decode_tokens_to_str(self, tokens: List[int]) -> str:
         """
@@ -81,7 +77,7 @@ class EOUMetrics(Metric):
         """
         decoded_tokens = super().decode_tokens_to_str(tokens)
         converted_decoded_str = [
-            self.sub_token if char != self.eou_token else char for char in decoded_tokens
+            self.sub_token if char not in [self.eou_token, " "] else char for char in decoded_tokens
         ]
 
         substituted_str = "".join(converted_decoded_str)
@@ -152,7 +148,7 @@ class EOUMetrics(Metric):
         num_predicted = 0.0
         correct_from_expected = 0.0
         correct_from_predicted = 0.0
-        distance = 0.0
+        total_latency = 0.0
         references = []
         with torch.no_grad():
             # prediction_cpu_tensor = tensors[0].long().cpu()
@@ -180,79 +176,52 @@ class EOUMetrics(Metric):
             r_list = r.split()
             hyp_eou = set(i for i in range(len(h_list)) if h_list[i] == self.eou_token)
             ref_eou = set(i for i in range(len(r_list)) if r_list[i] == self.eou_token)
-            num_expected_eou_present, total_num_expected_eou = self.compute_recall(hyp_eou, ref_eou)
-            num_predicted_eou_valid, total_num_predicted_eou = self.compute_precision(hyp_eou, ref_eou)
-            distance_from_expected = self.compute_distance(hyp_eou, ref_eou)
+            num_expected_eou_present, total_num_expected_eou, latency = self.compute_recall_precision_latency(hyp_eou, ref_eou)
+            num_predicted_eou_valid, total_num_predicted_eou, _ = self.compute_recall_precision_latency(ref_eou, hyp_eou)
 
             correct_from_expected += num_expected_eou_present
             num_expected += total_num_expected_eou
             correct_from_predicted += num_predicted_eou_valid
             num_predicted += total_num_predicted_eou
-            distance += distance_from_expected
+            total_latency += latency
 
         self.correct_from_expected = torch.tensor(correct_from_expected, device=self.correct_from_expected.device,
-                                                  dtype=self.scores.dtype)
+                                                  dtype=self.correct_from_expected.dtype)
         self.correct_from_predicted = torch.tensor(correct_from_predicted, device=self.correct_from_predicted.device,
-                                                   dtype=self.scores.dtype)
-        self.num_expected = torch.tensor(num_expected, device=self.num_expected.device, dtype=self.scores.dtype)
-        self.num_predicted = torch.tensor(num_predicted, device=self.num_predicted.device, dtype=self.scores.dtype)
-        self.distance = torch.tensor(distance, device=self.distance.device, dtype=self.distance.dtype)
+                                                   dtype=self.correct_from_predicted.dtype)
+        self.num_expected = torch.tensor(num_expected, device=self.num_expected.device, dtype=self.num_expected.dtype)
+        self.num_predicted = torch.tensor(num_predicted, device=self.num_predicted.device, dtype=self.num_predicted.dtype)
+        self.total_latency = torch.tensor(total_latency, device=self.total_latency.device, dtype=self.total_latency.dtype)
 
-    def compute_recall(self, hyp_eou_idx: Set[int], ref_eou_idx: Set[int]) -> Tuple[float, float]:
+    def compute_recall_precision_latency(self, hyp_eou_idx: Set[int], ref_eou_idx: Set[int]) -> Tuple[float, float, float]:
         """
-        Return the number of correct EOU token detected in hyp_eou_idx, if any. Also, return the number of expected
-        EOU tokens.
+        Compute and return the following:
+            1. The number of correct EOU token detected in hyp_eou_idx, if any.
+            2. The number of expected EOU tokens.
+            3. The latency between the acceptably predicted EOU tokens and the corresponding expected ones
 
+        When calculating recall:
         For each of the expected EOU token in ref_eou_idx, if there exists an EOU token in hyp_eou_idx with index
         within ±self.tolerance of the index of this expected EOU token, then the prediction is deemed correct.
         Otherwise, it is incorrect.
-        """
-        correct = 0.0
-        for expected_idx in ref_eou_idx:
-            for tol_level in (1, self.tolerance + 1):
-                if expected_idx + tol_level in hyp_eou_idx or expected_idx - tol_level in hyp_eou_idx:
-                    correct += 1.0
-                    break
 
-        return correct, len(ref_eou_idx)
-
-    def compute_precision(self, hyp_eou_idx: Set[int], ref_eou_idx: Set[int]) -> Tuple[float, float]:
-        """
-        Amongst the predicted EOU tokens, return the number of correct EOU token predicted. Also, return the number of
-        predicted EOU tokens.
-
+        When calculating precision:
         For each of predicted EOU token in hyp_eou_idx, if there exists an EOU token in ref_eou_token with index
         within ±self.tolerance of the index of this predicted token, then the prediction is deemed correct.
         Otherwise, it is incorrect.
+
+        Note that this method can be used to both compute precision and recall. Recall can be computed by giving
+        the method (hypotheses, references) where as precision can be computed by calling the method with the arguments
+        passed in reverse. The latency calculation returned when computing precision is irrelevant and shouldn't be
+        used.
         """
         correct = 0.0
-        for predicted_idx in hyp_eou_idx:
-            for tol_level in (1, self.tolerance + 1):
-                if predicted_idx + tol_level in ref_eou_idx or predicted_idx - tol_level in ref_eou_idx:
-                    correct += 1.0
-                    break
-
-        return correct, len(hyp_eou_idx)
-
-    def compute_distance(self, hyp_eou_idx: Set[int], ref_eou_idx: Set[int]) -> float:
-        """
-        Compute the distance between the predicted EOU tokens within acceptable index range and the corresponding
-        expected EOU token.
-
-        """
-        distance = 0.0
+        latency = 0.0
         for expected_idx in ref_eou_idx:
-            for tol_level in (1, self.tolerance + 1):
-                if expected_idx + tol_level in hyp_eou_idx or expected_idx - tol_level in hyp_eou_idx:
-                    distance += tol_level
+            for predicted_idx in hyp_eou_idx:
+                if expected_idx - self.tolerance <= predicted_idx <= expected_idx + self.tolerance:
+                    correct += 1.0
+                    latency += abs(predicted_idx - expected_idx)
                     break
 
-        return distance
-
-    def compute(self) -> Tuple[float, float, float]:
-        """
-        Computes and returns, in the following order: recall, predcision, latency
-        """
-        return self.correct_from_expected / self.num_expected, \
-            self.correct_from_predicted / self.num_predicted, \
-            self.distance / self.correct_from_expected
+        return correct, len(ref_eou_idx), latency
