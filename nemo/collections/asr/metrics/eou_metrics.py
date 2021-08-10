@@ -178,11 +178,11 @@ class EOUMetrics(Metric):
         for h, r in zip(hypotheses, references):
             h_list = h.split()
             r_list = r.split()
-            hyp_eos = set(i for i in range(len(h_list)) if h_list[i] == self.eou_token)
-            ref_eos = set(i for i in range(len(r_list)) if r_list[i] == self.eou_token)
-            num_expected_eou_present, total_num_expected_eou = self.compute_recall(hyp_eos, ref_eos)
-            num_predicted_eou_valid, total_num_predicted_eou = self.compute_precision(hyp_eos, ref_eos)
-            distance_from_expected = self.compute_distance(hyp_eos, ref_eos)
+            hyp_eou = set(i for i in range(len(h_list)) if h_list[i] == self.eou_token)
+            ref_eou = set(i for i in range(len(r_list)) if r_list[i] == self.eou_token)
+            num_expected_eou_present, total_num_expected_eou = self.compute_recall(hyp_eou, ref_eou)
+            num_predicted_eou_valid, total_num_predicted_eou = self.compute_precision(hyp_eou, ref_eou)
+            distance_from_expected = self.compute_distance(hyp_eou, ref_eou)
 
             correct_from_expected += num_expected_eou_present
             num_expected += total_num_expected_eou
@@ -198,52 +198,52 @@ class EOUMetrics(Metric):
         self.num_predicted = torch.tensor(num_predicted, device=self.num_predicted.device, dtype=self.scores.dtype)
         self.distance = torch.tensor(distance, device=self.distance.device, dtype=self.distance.dtype)
 
-    def compute_recall(self, hyp_eos_idx: Set[int], ref_eos_idx: Set[int]) -> Tuple[float, float]:
+    def compute_recall(self, hyp_eou_idx: Set[int], ref_eou_idx: Set[int]) -> Tuple[float, float]:
         """
-        Return the number of correct EOU token detected in hyp_eos_idx, if any. Also, return the number of expected
+        Return the number of correct EOU token detected in hyp_eou_idx, if any. Also, return the number of expected
         EOU tokens.
 
-        For each of the expected EOU token in ref_eos_idx, if there exists an EOU token in hyp_eos_idx with index
+        For each of the expected EOU token in ref_eou_idx, if there exists an EOU token in hyp_eou_idx with index
         within ±self.tolerance of the index of this expected EOU token, then the prediction is deemed correct.
         Otherwise, it is incorrect.
         """
         correct = 0.0
-        for expected_idx in ref_eos_idx:
+        for expected_idx in ref_eou_idx:
             for tol_level in (1, self.tolerance + 1):
-                if expected_idx + tol_level in hyp_eos_idx or expected_idx - tol_level in hyp_eos_idx:
+                if expected_idx + tol_level in hyp_eou_idx or expected_idx - tol_level in hyp_eou_idx:
                     correct += 1.0
                     break
 
-        return correct, len(ref_eos_idx)
+        return correct, len(ref_eou_idx)
 
-    def compute_precision(self, hyp_eos_idx: Set[int], ref_eos_idx: Set[int]) -> Tuple[float, float]:
+    def compute_precision(self, hyp_eou_idx: Set[int], ref_eou_idx: Set[int]) -> Tuple[float, float]:
         """
-        Amongst the predicted EOS tokens, return the number of correct EOU token predicted. Also, return the number of
+        Amongst the predicted EOU tokens, return the number of correct EOU token predicted. Also, return the number of
         predicted EOU tokens.
 
-        For each of predicted EOU token in hyp_eos_idx, if there exists an EOU token in ref_eos_token with index
+        For each of predicted EOU token in hyp_eou_idx, if there exists an EOU token in ref_eou_token with index
         within ±self.tolerance of the index of this predicted token, then the prediction is deemed correct.
         Otherwise, it is incorrect.
         """
         correct = 0.0
-        for predicted_idx in hyp_eos_idx:
+        for predicted_idx in hyp_eou_idx:
             for tol_level in (1, self.tolerance + 1):
-                if predicted_idx + tol_level in ref_eos_idx or predicted_idx - tol_level in ref_eos_idx:
+                if predicted_idx + tol_level in ref_eou_idx or predicted_idx - tol_level in ref_eou_idx:
                     correct += 1.0
                     break
 
-        return correct, len(hyp_eos_idx)
+        return correct, len(hyp_eou_idx)
 
-    def compute_distance(self, hyp_eos_idx: Set[int], ref_eos_idx: Set[int]) -> float:
+    def compute_distance(self, hyp_eou_idx: Set[int], ref_eou_idx: Set[int]) -> float:
         """
         Compute the distance between the predicted EOU tokens within acceptable index range and the corresponding
         expected EOU token.
 
         """
         distance = 0.0
-        for expected_idx in ref_eos_idx:
+        for expected_idx in ref_eou_idx:
             for tol_level in (1, self.tolerance + 1):
-                if expected_idx + tol_level in hyp_eos_idx or expected_idx - tol_level in hyp_eos_idx:
+                if expected_idx + tol_level in hyp_eou_idx or expected_idx - tol_level in hyp_eou_idx:
                     distance += tol_level
                     break
 
