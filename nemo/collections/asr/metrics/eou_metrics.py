@@ -68,6 +68,7 @@ class EOUMetrics(Metric):
         self.add_state("num_predicted", default=torch.tensor(0), dist_reduce_fx='sum', persistent=False)
         self.add_state("correct_from_expected", default=torch.tensor(0), dist_reduce_fx='sum', persistent=False)
         self.add_state("correct_from_predicted", default=torch.tensor(0), dist_reduce_fx='sum', persistent=False)
+        self.add_state("distance", default.tensor(0), dist_reduce_fx='sum', persistent=False)
 
     def decode_tokens_to_str(self, tokens: List[int]) -> str:
         """
