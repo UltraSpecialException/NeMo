@@ -23,51 +23,63 @@ from string import punctuation
 import json
 
 
-def setup_model(cfg: omegaconf.DictConfig, trainer: ptl.Trainer) -> nemo_asr.models.EncDecCTCModelBPE:
+def setup_model(cfg: omegaconf.OmegaConf, trainer: ptl.Trainer) -> nemo_asr.models.EncDecCTCModelBPE:
     """
     Returns a model from the given pretrained model name.
 
     Argument(s):
         cfg: the loaded YAML file containing the configurations necessary
     """
-    pretrained_model = nemo_asr.models.EncDecCTCModelBPE.from_pretrained(cfg.model.name, map_location="cpu")
+    if "run_rnnt" in cfg and cfg.run_rnnt:
+        model = nemo_asr.models.EncDecRNNTBPEModel(cfg=cfg.model, trainer=trainer)
+        args = ["init_from_nemo_model", "init_from_pretrained_model", "init_from_ptl_ckpt"]
+        arg_matches = [(1 if arg in cfg and arg is not None else 0) for arg in args]
 
-    if "run_two_head" in cfg and cfg.run_two_head:
-        model_class = nemo_asr.models.EOUDetectionModel
+        if not sum(arg_matches):
+            raise ValueError("To finetune the Conformer RNNT architecture, a checkpoint or pretrained weights need "
+                             "to be given.")
+
+        model.maybe_init_from_pretrained_checkpoint(cfg)
+
     else:
-        model_class = nemo_asr.models.EncDecCTCModelBPE
+        pretrained_model = nemo_asr.models.EncDecCTCModelBPE.from_pretrained(cfg.model.name, map_location="cpu")
 
-    model = model_class(cfg=cfg.model, trainer=trainer)
+        if "run_two_head" in cfg and cfg.run_two_head:
+            model_class = nemo_asr.models.EOUDetectionModel
+        else:
+            model_class = nemo_asr.models.EncDecCTCModelBPE
 
-    try:
-        model.encoder.load_state_dict(pretrained_model.encoder.state_dict(), strict=False)
-        logging.info("Successfully loaded encoder weights")
-    except Exception as e:
-        logging.info(f"Could not load encoder checkpoint: {e}")
+        model = model_class(cfg=cfg.model, trainer=trainer)
 
-    try:
-        model.encoder.load_state_dict(pretrained_model.decoder.state_dict(), strict=False)
-        logging.info("Successfully loaded decoder weights")
-    except Exception as e:
-        logging.info(f"Could not load decoder checkpoint: {e}")
+        try:
+            model.encoder.load_state_dict(pretrained_model.encoder.state_dict(), strict=False)
+            logging.info("Successfully loaded encoder weights")
+        except Exception as e:
+            logging.info(f"Could not load encoder checkpoint: {e}")
 
-    if "run_two_head" in cfg and cfg.run_two_head:
-        weights = pretrained_model.decoder.state_dict()
-        weights_key = "decoder_layers.0.weight"
-        pretrained_decoder_weights = weights[weights_key].squeeze(-1)
+        try:
+            model.encoder.load_state_dict(pretrained_model.decoder.state_dict(), strict=False)
+            logging.info("Successfully loaded decoder weights")
+        except Exception as e:
+            logging.info(f"Could not load decoder checkpoint: {e}")
 
-        projected_weights = pretrained_decoder_weights @ pretrained_decoder_weights.transpose(0, 1)
+        if "run_two_head" in cfg and cfg.run_two_head:
+            weights = pretrained_model.decoder.state_dict()
+            weights_key = "decoder_layers.0.weight"
+            pretrained_decoder_weights = weights[weights_key].squeeze(-1)
 
-        # let W be the pretrained decoder's weights, new weights = (W x W') / norm(W) where norm(W) is W's Frobenius
-        # norm
-        normed_projected_weights = projected_weights / torch.linalg.norm(projected_weights)
+            projected_weights = pretrained_decoder_weights @ pretrained_decoder_weights.transpose(0, 1)
 
-        weights[weights_key] = normed_projected_weights.unsqueeze(-1)
-        model.eou_decoder.load_state_dict(weights)
+            # let W be the pretrained decoder's weights, new weights = (W x W') / norm(W) where norm(W) is W's Frobenius
+            # norm
+            normed_projected_weights = projected_weights / torch.linalg.norm(projected_weights)
 
-    del pretrained_model
+            weights[weights_key] = normed_projected_weights.unsqueeze(-1)
+            model.eou_decoder.load_state_dict(weights)
 
-    if cfg.model.freeze_encoder:
+        del pretrained_model
+
+    if "freeze_encoder" in cfg.model and cfg.model.freeze_encoder:
         def enable_bn_se(module):
             """
             Function to unfreeze the batch norm and SqueezeExcite modules in the encoder when the rest is frozen
