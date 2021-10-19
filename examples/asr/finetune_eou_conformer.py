@@ -43,13 +43,7 @@ def setup_model(cfg: omegaconf.OmegaConf, trainer: ptl.Trainer) -> nemo_asr.mode
 
     else:
         pretrained_model = nemo_asr.models.EncDecCTCModelBPE.from_pretrained(cfg.model.name, map_location="cpu")
-
-        if "run_two_head" in cfg and cfg.run_two_head:
-            model_class = nemo_asr.models.EOUDetectionModel
-        else:
-            model_class = nemo_asr.models.EncDecCTCModelBPE
-
-        model = model_class(cfg=cfg.model, trainer=trainer)
+        model = nemo_asr.models.EncDecCTCModelBPE(cfg=cfg.model, trainer=trainer)
 
         try:
             model.encoder.load_state_dict(pretrained_model.encoder.state_dict(), strict=False)
@@ -58,24 +52,10 @@ def setup_model(cfg: omegaconf.OmegaConf, trainer: ptl.Trainer) -> nemo_asr.mode
             logging.info(f"Could not load encoder checkpoint: {e}")
 
         try:
-            model.encoder.load_state_dict(pretrained_model.decoder.state_dict(), strict=False)
+            model.decoder.load_state_dict(pretrained_model.decoder.state_dict(), strict=False)
             logging.info("Successfully loaded decoder weights")
         except Exception as e:
             logging.info(f"Could not load decoder checkpoint: {e}")
-
-        if "run_two_head" in cfg and cfg.run_two_head:
-            weights = pretrained_model.decoder.state_dict()
-            weights_key = "decoder_layers.0.weight"
-            pretrained_decoder_weights = weights[weights_key].squeeze(-1)
-
-            projected_weights = pretrained_decoder_weights @ pretrained_decoder_weights.transpose(0, 1)
-
-            # let W be the pretrained decoder's weights, new weights = (W x W') / norm(W) where norm(W) is W's Frobenius
-            # norm
-            normed_projected_weights = projected_weights / torch.linalg.norm(projected_weights)
-
-            weights[weights_key] = normed_projected_weights.unsqueeze(-1)
-            model.eou_decoder.load_state_dict(weights)
 
         del pretrained_model
 

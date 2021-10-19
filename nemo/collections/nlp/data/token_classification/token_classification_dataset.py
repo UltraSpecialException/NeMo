@@ -22,7 +22,8 @@ https://github.com/huggingface/pytorch-pretrained-BERT
 
 import os
 import pickle
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Callable
+from tqdm.auto import tqdm
 
 import numpy as np
 import torch
@@ -45,6 +46,7 @@ def get_features(
     raw_labels: List[str] = None,
     ignore_extra_tokens: bool = False,
     ignore_start_end: bool = False,
+    loss_mask_gen: Optional[Callable] = None
 ):
     """
     Processes the data and returns features.
@@ -59,6 +61,7 @@ def get_features(
             Required for training and evaluation, not needed for inference.
         ignore_extra_tokens: whether to ignore extra tokens in the loss_mask
         ignore_start_end: whether to ignore bos and eos tokens in the loss_mask
+        loss_mask_gen: a function to generate loss mask from the text, if none is given, use the default strategy
     """
     all_subtokens = []
     all_loss_mask = []
@@ -73,12 +76,16 @@ def get_features(
     if raw_labels is not None:
         with_label = True
 
+    pbar = tqdm(total=len(queries))
     for i, query in enumerate(queries):
         words = query.strip().split()
 
         # add bos token
         subtokens = [tokenizer.cls_token]
-        loss_mask = [1 - ignore_start_end]
+        if loss_mask_gen is None:
+            loss_mask = [1 - ignore_start_end]
+        else:
+            loss_mask = loss_mask_gen(words, tokenizer)
         subtokens_mask = [0]
         if with_label:
             pad_id = label_ids[pad_label]
@@ -94,17 +101,21 @@ def get_features(
 
             subtokens.extend(word_tokens)
 
-            loss_mask.append(1)
-            loss_mask.extend([int(not ignore_extra_tokens)] * (len(word_tokens) - 1))
+            if loss_mask_gen is None:
+                loss_mask.append(1)
+                loss_mask.extend([int(not ignore_extra_tokens)] * (len(word_tokens) - 1))
 
             subtokens_mask.append(1)
             subtokens_mask.extend([0] * (len(word_tokens) - 1))
 
             if with_label:
                 labels.extend([query_labels[j]] * len(word_tokens))
+
         # add eos token
         subtokens.append(tokenizer.sep_token)
-        loss_mask.append(1 - ignore_start_end)
+        if loss_mask_gen is None:
+            loss_mask.append(1 - ignore_start_end)
+
         subtokens_mask.append(0)
         sent_lengths.append(len(subtokens))
         all_subtokens.append(subtokens)
@@ -115,6 +126,8 @@ def get_features(
         if with_label:
             labels.append(pad_id)
             all_labels.append(labels)
+
+        pbar.update(1)
 
     max_seq_length_data = max(sent_lengths)
     max_seq_length = min(max_seq_length, max_seq_length_data) if max_seq_length > 0 else max_seq_length_data
@@ -211,9 +224,9 @@ class BertTokenClassificationDataset(Dataset):
         ignore_extra_tokens: bool = False,
         ignore_start_end: bool = False,
         use_cache: bool = True,
+        loss_mask_gen: Optional[Callable] = None
     ):
         """ Initializes BertTokenClassificationDataset. """
-
         data_dir = os.path.dirname(text_file)
         filename = os.path.basename(text_file)
 
@@ -263,6 +276,7 @@ class BertTokenClassificationDataset(Dataset):
                 label_ids=label_ids,
                 ignore_extra_tokens=ignore_extra_tokens,
                 ignore_start_end=ignore_start_end,
+                loss_mask_gen=loss_mask_gen
             )
 
             pickle.dump(features, open(features_pkl, "wb"))
@@ -315,7 +329,7 @@ class BertTokenClassificationInferDataset(Dataset):
         }
 
     def __init__(
-        self, queries: List[str], max_seq_length: int, tokenizer: TokenizerSpec,
+        self, queries: List[str], max_seq_length: int, tokenizer: TokenizerSpec, loss_mask_gen: Optional[Callable]=None
     ):
         """
         Initializes BertTokenClassificationInferDataset
@@ -323,8 +337,9 @@ class BertTokenClassificationInferDataset(Dataset):
             queries: text sequences
             max_seq_length: max sequence length minus 2 for [CLS] and [SEP]
             tokenizer: such as AutoTokenizer
+            loss_mask_gen: function to generate loss mask from text
         """
-        features = get_features(queries=queries, max_seq_length=max_seq_length, tokenizer=tokenizer)
+        features = get_features(queries=queries, max_seq_length=max_seq_length, tokenizer=tokenizer, loss_mask_gen=loss_mask_gen)
 
         self.all_input_ids = features[0]
         self.all_segment_ids = features[1]
