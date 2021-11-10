@@ -21,6 +21,7 @@ from typing import Dict, List, Optional, Union
 import torch
 from omegaconf import DictConfig, OmegaConf, open_dict
 from pytorch_lightning import Trainer
+from torch.utils.data import ChainDataset
 from tqdm.auto import tqdm
 
 from nemo.collections.asr.data import audio_to_text_dataset
@@ -125,6 +126,14 @@ class EncDecCTCModel(ASRModel, ExportableEncDecModel, ASRModuleMixin):
             description="For details about this model, please visit https://ngc.nvidia.com/catalog/models/nvidia:nemo:stt_zh_citrinet_512",
             location="https://api.ngc.nvidia.com/v2/models/nvidia/nemo/stt_zh_citrinet_512/versions/1.0.0rc1/files/stt_zh_citrinet_512.nemo",
         )
+        results.append(model)
+
+        model = PretrainedModelInfo(
+            pretrained_model_name="stt_zh_citrinet_1024_gamma_0_25",
+            description="For details about this model, please visit https://ngc.nvidia.com/catalog/models/nvidia:nemo:stt_zh_citrinet_1024_gamma_0_25",
+            location="https://api.ngc.nvidia.com/v2/models/nvidia/nemo/stt_zh_citrinet_1024_gamma_0_25/versions/1.0.0/files/stt_zh_citrinet_1024_gamma_0_25.nemo",
+        )
+
         results.append(model)
 
         model = PretrainedModelInfo(
@@ -374,7 +383,7 @@ class EncDecCTCModel(ASRModel, ExportableEncDecModel, ASRModuleMixin):
                 return None
 
             shuffle_n = config.get('shuffle_n', 4 * config['batch_size']) if shuffle else 0
-            dataset = audio_to_text_dataset.get_tarred_char_dataset(
+            dataset = audio_to_text_dataset.get_tarred_dataset(
                 config=config,
                 shuffle_n=shuffle_n,
                 global_rank=self.global_rank,
@@ -389,10 +398,15 @@ class EncDecCTCModel(ASRModel, ExportableEncDecModel, ASRModuleMixin):
 
             dataset = audio_to_text_dataset.get_char_dataset(config=config, augmentor=augmentor)
 
+        if type(dataset) is ChainDataset:
+            collate_fn = dataset.datasets[0].collate_fn
+        else:
+            collate_fn = dataset.collate_fn
+
         return torch.utils.data.DataLoader(
             dataset=dataset,
             batch_size=config['batch_size'],
-            collate_fn=dataset.collate_fn,
+            collate_fn=collate_fn,
             drop_last=config.get('drop_last', False),
             shuffle=shuffle,
             num_workers=config.get('num_workers', 0),
@@ -636,13 +650,16 @@ class EncDecCTCModel(ASRModel, ExportableEncDecModel, ASRModuleMixin):
         Returns:
             A pytorch DataLoader for the given audio file(s).
         """
+        batch_size = min(config['batch_size'], len(config['paths2audio_files']))
         dl_config = {
             'manifest_filepath': os.path.join(config['temp_dir'], 'manifest.json'),
             'sample_rate': self.preprocessor._sample_rate,
             'labels': self.decoder.vocabulary,
-            'batch_size': min(config['batch_size'], len(config['paths2audio_files'])),
-            'trim_silence': True,
+            'batch_size': batch_size,
+            'trim_silence': False,
             'shuffle': False,
+            'num_workers': min(batch_size, os.cpu_count() - 1),
+            'pin_memory': True,
         }
 
         temporary_datalayer = self._setup_dataloader_from_config(config=DictConfig(dl_config))
